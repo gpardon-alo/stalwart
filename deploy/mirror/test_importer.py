@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
-from importer import ImportRejected, Jmap, Mirror, SameOriginRedirect, MAIL
+from importer import ImportRejected, Jmap, Mirror, SameOriginRedirect, MAIL, log_delivery_failure
 
 
 class FakeJmap:
@@ -57,8 +57,32 @@ class MirrorTests(unittest.TestCase):
 
     def test_unknown_recipient_does_not_partially_import(self):
         self.event['receipt']['recipients'].append('unknown@example.com')
-        with self.assertRaises(ValueError): self.mirror.process(self.event)
+        with self.assertRaises(ValueError) as failure: self.mirror.process(self.event)
+        with self.assertLogs('mail-mirror', level='ERROR') as logs:
+            log_delivery_failure(failure.exception, 'notification-id')
+        self.assertIn('reason=unmapped_recipient', logs.output[0])
+        self.assertNotIn('unknown@example.com', logs.output[0])
         self.s3.get_object.assert_not_called()
+
+    def test_diagnostics_never_echo_unknown_exception_contents(self):
+        for failure in [ValueError('password=private-secret'),
+                        RuntimeError('message body=confidential'),
+                        json.JSONDecodeError('bad JSON', 'private-body', 0)]:
+            with self.assertLogs('mail-mirror', level='ERROR') as logs:
+                log_delivery_failure(failure, 'notification-id')
+            for secret in ['private-secret', 'confidential', 'private-body']:
+                self.assertNotIn(secret, logs.output[0])
+        self.assertIn('reason=invalid_notification_json', logs.output[0])
+
+    def test_diagnostics_distinguish_wrong_bucket_and_prefix(self):
+        for field, value, reason in [('bucketName', 'other', 'bucket_not_allowed'),
+                                     ('objectKey', 'other/message', 'prefix_not_allowed')]:
+            event = json.loads(json.dumps(self.event))
+            event['receipt']['action'][field] = value
+            with self.assertRaises(ValueError) as failure: self.mirror.process(event)
+            with self.assertLogs('mail-mirror', level='ERROR') as logs:
+                log_delivery_failure(failure.exception, 'notification-id')
+            self.assertIn('reason=' + reason, logs.output[0])
 
     def test_wrong_bucket_prefix_or_virus_are_held(self):
         for field, value in [('bucketName', 'other'), ('objectKey', 'other/message')]:

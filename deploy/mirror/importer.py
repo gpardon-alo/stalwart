@@ -16,6 +16,37 @@ CORE = 'urn:ietf:params:jmap:core'
 MAIL = 'urn:ietf:params:jmap:mail'
 LOG = logging.getLogger('mail-mirror')
 
+# Only these controlled diagnostics may be included in logs. Never log arbitrary
+# exception text: SDK/server errors can contain URLs, message data or credentials.
+SAFE_FAILURE_REASONS = {
+    'Unexpected SNS topic': 'unexpected_sns_topic',
+    'Expected an SES receipt notification': 'not_ses_receipt_notification',
+    'Expected the SES S3-action notification, not an S3 ObjectCreated event': 'not_ses_s3_notification',
+    'Object bucket outside configured allowlist': 'bucket_not_allowed',
+    'Object prefix outside configured allowlist': 'prefix_not_allowed',
+    'Virus scan did not pass; message held for review': 'virus_scan_not_passed',
+    'Missing envelope recipients': 'missing_envelope_recipients',
+    'Unmapped envelope recipient; held for explicit mapping': 'unmapped_recipient',
+    'No mapped mailbox targets': 'no_mailbox_targets',
+    'Message exceeds configured import limit': 'message_too_large',
+    'Not a plaintext RFC822 message; check SES client-side encryption': 'not_plaintext_mail',
+    'Expected exactly one Inbox': 'inbox_not_found_or_ambiguous',
+    'JMAP requires a trusted HTTPS base URL': 'invalid_jmap_url',
+    'Refusing to send credentials to another origin': 'jmap_cross_origin_url',
+    'Cross-origin redirects are not allowed for authenticated requests': 'jmap_cross_origin_redirect',
+}
+
+
+def log_delivery_failure(error, notification_id):
+    if isinstance(error, json.JSONDecodeError):
+        reason = 'invalid_notification_json'
+    elif isinstance(error, ImportRejected):
+        reason = 'jmap_import_rejected'
+    else:
+        reason = SAFE_FAILURE_REASONS.get(str(error), 'unclassified_failure')
+    LOG.error('Delivery held for retry/review (%s), reason=%s, notification=%s',
+              type(error).__name__, reason, notification_id)
+
 
 class ImportRejected(Exception):
     pass
@@ -103,8 +134,10 @@ class Mirror:
         if action.get('type') != 'S3':
             raise ValueError('Expected the SES S3-action notification, not an S3 ObjectCreated event')
         bucket, key = action['bucketName'], action['objectKey']
-        if bucket != self.config['bucket'] or not any(key.startswith(p) for p in self.config['prefixes']):
-            raise ValueError('Object outside configured bucket/prefix allowlist')
+        if bucket != self.config['bucket']:
+            raise ValueError('Object bucket outside configured allowlist')
+        if not any(key.startswith(p) for p in self.config['prefixes']):
+            raise ValueError('Object prefix outside configured allowlist')
         if receipt.get('virusVerdict', {}).get('status') != 'PASS':
             raise ValueError('Virus scan did not pass; message held for review')
         # Envelope recipients include aliases and BCC; never guess from To/Cc headers.
@@ -192,9 +225,7 @@ def main():
                 try:
                     mirror.process(json.loads(message['Body']))
                 except Exception as exc:
-                    # Exception text from SDKs can include sensitive URLs; log only its type.
-                    LOG.error('Delivery held for retry/review (%s), notification=%s',
-                              type(exc).__name__, message['MessageId'])
+                    log_delivery_failure(exc, message['MessageId'])
                     continue
                 sqs.delete_message(QueueUrl=config['queue_url'], ReceiptHandle=message['ReceiptHandle'])
                 LOG.info('Notification imported or already present; notification=%s', message['MessageId'])
