@@ -1,11 +1,32 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Optional SES S3 notification queue for parallel Stalwart imports; does not change receipt rules or DNS.
+Description: Optional SES S3 notification queue and importer IAM user; does not change receipt rules or DNS.
 Parameters:
   ReceiptRuleArns:
     Type: CommaDelimitedList
     Description: Comma-separated SES rule ARNs. To authorize all rules in a named set, use arn:aws:ses:us-east-1:ACCOUNT:receipt-rule-set/SET:receipt-rule/* . Supports multiple sets; does not activate them.
     AllowedPattern: 'arn:aws:ses:us-east-1:[0-9]{12}:receipt-rule-set/[A-Za-z0-9_.-]+:receipt-rule/([A-Za-z0-9_.-]+|\*)'
     ConstraintDescription: Supply full us-east-1 receipt-rule ARNs, using an exact rule name or * for all rules in one explicitly named set.
+  SourceBucketName:
+    Type: String
+    Description: Existing S3 bucket containing the email copies (bucket name only, not an ARN).
+    AllowedPattern: '[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]'
+  MailPrefixOne:
+    Type: String
+    Default: domain-one/
+    Description: First permitted mail object prefix, including the trailing slash.
+    AllowedPattern: '[A-Za-z0-9][A-Za-z0-9_./-]*/'
+  MailPrefixTwo:
+    Type: String
+    Default: domain-two/
+    Description: Second permitted mail object prefix, including the trailing slash.
+    AllowedPattern: '[A-Za-z0-9][A-Za-z0-9_./-]*/'
+  SourceKmsKeyArn:
+    Type: String
+    Default: ''
+    Description: Optional exact KMS key ARN for S3 server-side encryption. Leave empty for SSE-S3. SES client-side encryption is not supported.
+    AllowedPattern: '(^$|arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key/[A-Za-z0-9-]+)'
+Conditions:
+  HasSourceKmsKey: !Not [!Equals [!Ref SourceKmsKeyArn, '']]
 Resources:
   DeadLetters:
     Type: AWS::SQS::Queue
@@ -68,6 +89,31 @@ Resources:
       Protocol: sqs
       Endpoint: !GetAtt Queue.Arn
       RawMessageDelivery: false
+  ImporterUser:
+    Type: AWS::IAM::User
+    Properties:
+      Policies:
+        - PolicyName: ImportMailCopies
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::${SourceBucketName}/${MailPrefixOne}*
+                  - !Sub arn:${AWS::Partition}:s3:::${SourceBucketName}/${MailPrefixTwo}*
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt Queue.Arn
+              - !If
+                - HasSourceKmsKey
+                - Effect: Allow
+                  Action: kms:Decrypt
+                  Resource: !Ref SourceKmsKeyArn
+                - !Ref AWS::NoValue
 Outputs:
   TopicArn:
     Value: !Ref Topic
@@ -75,3 +121,8 @@ Outputs:
     Value: !Ref Queue
   QueueArn:
     Value: !GetAtt Queue.Arn
+  ImporterUserName:
+    Description: IAM user with the importer policy. Create its access key in IAM and store it only on Lightsail.
+    Value: !Ref ImporterUser
+  ImporterUserArn:
+    Value: !GetAtt ImporterUser.Arn

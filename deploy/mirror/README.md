@@ -1,6 +1,6 @@
 # Temporary parallel receiving: SES/S3 to Stalwart
 
-WorkMail stays primary. This optional worker imports copies directly over JMAP into Stalwart inboxes; it never sends SMTP mail, changes MX records, deletes S3 messages, or modifies WorkMail. No AWS resources are created by these files and the worker is not included in the main deployment workflow.
+WorkMail stays primary. This optional worker imports copies directly over JMAP into Stalwart inboxes; it never sends SMTP mail, changes MX records, deletes S3 messages, or modifies WorkMail. The worker is not included in the main deployment workflow. AWS resources are created only when you explicitly deploy the CloudFormation template.
 
 Configure your source bucket, actual bucket region, and permitted prefixes in the ignored `mailboxes.json`. Public examples use placeholders only. SES/SNS/SQS use `us-east-1` in this example; substitute your actual region if different. The S3 bucket may be in another region.
 
@@ -8,7 +8,29 @@ Configure your source bucket, actual bucket region, and permitted prefixes in th
 
 S3 raw mail alone does not reliably identify BCC recipients or alias expansion. Do not guess from To/Cc. Use the **optional SNS notification on the existing SES S3 receipt action**, which includes `receipt.recipients`, `receipt.action.bucketName` and `receipt.action.objectKey`.
 
-The optional `aws-resources.yaml` CloudFormation template creates the topic, queues and restricted resource policies in the account where you deploy it, region `us-east-1`. Supply exact SES receipt-rule ARNs or the per-set patterns below, comma-separated, as `ReceiptRuleArns`. It does not edit receipt rules or DNS. Review and deploy it separately, then use its outputs in `mailboxes.json`.
+The optional `aws-resources.yaml` CloudFormation template creates the topic, queues, restricted resource policies and a dedicated importer IAM user in the account where you deploy it, region `us-east-1`. Supply exact SES receipt-rule ARNs or the per-set patterns below, comma-separated, as `ReceiptRuleArns`. It does not edit receipt rules or DNS. Review and deploy it separately, then use its outputs in `mailboxes.json`.
+
+### IAM permissions and stack parameters
+
+The stack creates a generated-name IAM user with an inline policy; it has no
+console password. Supply `SourceBucketName` (name only), `MailPrefixOne` and
+`MailPrefixTwo` (both including their trailing slash). These values must match
+`mailboxes.json`. The policy allows only reading objects under those prefixes
+and consuming/inspecting this stack's SQS queue. No S3 write, SES send, WorkMail,
+Route 53 or administrator permissions are granted.
+
+For ordinary S3 SSE-KMS, optionally set `SourceKmsKeyArn` to the exact key ARN;
+the stack adds `kms:Decrypt` on that key only. The key policy must also allow the
+user. Leave it empty for SSE-S3. SES client-side message encryption remains
+unsupported.
+
+On the CloudFormation review screen, acknowledge creation of IAM resources
+(`CAPABILITY_IAM` when using the CLI). After creation/update, find
+`ImporterUserName` in Outputs. Open that user in IAM, create an access key, and
+save the pair directly in the ignored Lightsail `aws-credentials` file. Keys are
+not generated or exposed in stack outputs. If updating a stack created with the
+older template, upload the new template and provide the new bucket/prefix
+parameters. Existing resources and receipt rules remain in place.
 
 ### Authorizing two receipt rule sets
 
@@ -39,7 +61,7 @@ In the existing SES **Deliver to S3 bucket** action, select that topic. Retain t
 
 1. Pull this repository's reviewed revision. Copy `mailboxes.example.json` to `mailboxes.json` in this directory. Verify bucket region, set the actual topic ARN and queue URL, and map **every desired recipient/alias** to one or more mailbox identifiers. Several aliases may point to one mailbox; each original object is imported once per target. Use lowercase recipient mapping keys.
 2. Configure each mailbox's Stalwart username and an app password in `mailboxes.json`. The password is for that Stalwart account, not WorkMail or SES. Accounts need JMAP access and permission to import messages into their own Inbox. The endpoint must have a valid HTTPS certificate (the existing Caddy web certificate suffices for JMAP; this does not use SMTP/IMAP).
-3. Copy `aws-credentials.example` to `aws-credentials`. Replace the bucket, prefix and account placeholders in `worker-policy.example.json` and use it as the starting IAM policy (add a specific KMS decrypt grant only if needed). Create dedicated AWS credentials limited to `s3:GetObject` on these two prefixes and `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` on this queue. The worker needs no SES sending, Route 53, S3 write, or WorkMail permissions. For ordinary S3 SSE-KMS, add the specific key's decrypt permission when required. **SES receipt-action client-side KMS encryption is not supported**; verify objects are readable RFC822 mail, not encrypted ciphertext. Do not change existing bucket encryption just for the importer.
+3. Copy `aws-credentials.example` to `aws-credentials`. Use the stack output `ImporterUserName` to find the already-provisioned IAM user and create its access key in IAM. If you created resources manually instead, replace placeholders in `worker-policy.example.json` and provision the policy/user yourself. Its permissions are limited to `s3:GetObject` on these two prefixes and `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` on this queue. The worker needs no SES sending, Route 53, S3 write, or WorkMail permissions. For ordinary S3 SSE-KMS, add the specific key's decrypt permission when required. **SES receipt-action client-side KMS encryption is not supported**; verify objects are readable RFC822 mail, not encrypted ciphertext. Do not change existing bucket encryption just for the importer.
 4. Make both files readable only by the container's UID 2001:
 
    ```sh
