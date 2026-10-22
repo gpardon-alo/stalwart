@@ -12,3 +12,7 @@ CLAUDE.md
 # Personal Lightsail deployment
 !.env.production.example
 /backups/
+/deploy/mirror/mailboxes.json
+/deploy/mirror/aws-credentials
+/deploy/mirror/__pycache__/
+!/deploy/mirror/.dockerignore

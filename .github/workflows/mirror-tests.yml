@@ -1,0 +1,16 @@
+name: Test optional mail mirror
+on:
+  push:
+    paths: [deploy/mirror/**, .github/workflows/mirror-tests.yml]
+  pull_request:
+    paths: [deploy/mirror/**, .github/workflows/mirror-tests.yml]
+permissions:
+  contents: read
+jobs:
+  test:
+    if: github.repository == 'gpardon-alo/stalwart'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: python3 -m unittest discover -s deploy/mirror -p 'test_*.py' -v
+      - run: docker compose -f deploy/mirror/compose.yaml config --quiet

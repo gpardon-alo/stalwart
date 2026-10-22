@@ -1,0 +1,22 @@
+name: stalwart-mirror
+services:
+  importer:
+    build: .
+    restart: unless-stopped
+    init: true
+    environment:
+      AWS_SHARED_CREDENTIALS_FILE: /run/secrets/aws-credentials
+      AWS_PROFILE: mirror
+      AWS_DEFAULT_REGION: us-east-1
+      MIRROR_DRY_RUN: ${MIRROR_DRY_RUN:-true}
+    volumes:
+      - state:/state
+      - ./mailboxes.json:/run/secrets/mailboxes.json:ro
+      - ./aws-credentials:/run/secrets/aws-credentials:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  state:

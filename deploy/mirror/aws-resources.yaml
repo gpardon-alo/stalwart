@@ -1,0 +1,76 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Optional SES S3 notification queue for parallel Stalwart imports; does not change receipt rules or DNS.
+Parameters:
+  ReceiptRuleArns:
+    Type: CommaDelimitedList
+    Description: Exact existing SES receipt rule ARNs allowed to publish notifications (comma-separated).
+    AllowedPattern: 'arn:aws:ses:us-east-1:[0-9]{12}:receipt-rule-set/.+:receipt-rule/.+'
+Resources:
+  DeadLetters:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: stalwart-mirror-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+  Queue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: stalwart-mirror
+      MessageRetentionPeriod: 1209600
+      VisibilityTimeout: 900
+      ReceiveMessageWaitTimeSeconds: 20
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetters.Arn
+        maxReceiveCount: 5
+  Topic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: stalwart-mirror
+  TopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref Topic]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ses.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref Topic
+            Condition:
+              StringEquals:
+                AWS:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                AWS:SourceArn: !Ref ReceiptRuleArns
+  QueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref Queue]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt Queue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref Topic
+  Subscription:
+    Type: AWS::SNS::Subscription
+    DependsOn: QueuePolicy
+    Properties:
+      TopicArn: !Ref Topic
+      Protocol: sqs
+      Endpoint: !GetAtt Queue.Arn
+      RawMessageDelivery: false
+Outputs:
+  TopicArn:
+    Value: !Ref Topic
+  QueueUrl:
+    Value: !Ref Queue
+  QueueArn:
+    Value: !GetAtt Queue.Arn

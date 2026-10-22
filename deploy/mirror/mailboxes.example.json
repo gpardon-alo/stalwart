@@ -1,0 +1,25 @@
+{
+  "bucket": "YOUR_SES_MAIL_BUCKET",
+  "bucket_region": "YOUR_BUCKET_REGION",
+  "prefixes": [
+    "domain-one/",
+    "domain-two/"
+  ],
+  "topic_arn": "arn:aws:sns:us-east-1:123456789012:stalwart-mirror",
+  "queue_url": "https://sqs.us-east-1.amazonaws.com/123456789012/stalwart-mirror",
+  "jmap_url": "https://mail.example.com",
+  "mailboxes": {
+    "primary": {
+      "username": "user@example.com",
+      "password": "REPLACE_ON_SERVER_WITH_STALWART_APP_PASSWORD"
+    }
+  },
+  "routes": {
+    "user@example.com": [
+      "primary"
+    ],
+    "alias@example.com": [
+      "primary"
+    ]
+  }
+}
