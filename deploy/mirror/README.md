@@ -8,7 +8,28 @@ Configure your source bucket, actual bucket region, and permitted prefixes in th
 
 S3 raw mail alone does not reliably identify BCC recipients or alias expansion. Do not guess from To/Cc. Use the **optional SNS notification on the existing SES S3 receipt action**, which includes `receipt.recipients`, `receipt.action.bucketName` and `receipt.action.objectKey`.
 
-The optional `aws-resources.yaml` CloudFormation template creates the topic, queues and restricted resource policies in the account where you deploy it, region `us-east-1`. Supply the exact existing SES receipt-rule ARN(s), comma-separated, as `ReceiptRuleArns`; it does not edit the receipt rule or DNS. Review and deploy it separately, then use its outputs in `mailboxes.json`. Alternatively, create these resources manually:
+The optional `aws-resources.yaml` CloudFormation template creates the topic, queues and restricted resource policies in the account where you deploy it, region `us-east-1`. Supply exact SES receipt-rule ARNs or the per-set patterns below, comma-separated, as `ReceiptRuleArns`. It does not edit receipt rules or DNS. Review and deploy it separately, then use its outputs in `mailboxes.json`.
+
+### Authorizing two receipt rule sets
+
+`ReceiptRuleArns` accepts exact rule ARNs or a `*` in the rule-name position to
+authorize every rule in an explicitly named set. For two sets, enter both patterns
+as one comma-separated value (replace the example account and set names):
+
+```text
+arn:aws:ses:us-east-1:123456789012:receipt-rule-set/SET_ONE:receipt-rule/*,arn:aws:ses:us-east-1:123456789012:receipt-rule-set/SET_TWO:receipt-rule/*
+```
+
+Existing exact-rule inputs remain supported and give narrower access. The topic
+policy also restricts publishing to the CloudFormation stack's AWS account. The
+queue and topic are shared by the authorized rules; no second stack is needed.
+Only one receipt rule set can be active per AWS account and region, so inactive
+sets do not produce incoming-mail notifications. This template does not activate
+or switch sets. If both domains receive in the same account/region, verify whether
+they are actually two rules within the same active set. Select the topic in each
+relevant S3 action when ready, retaining its existing WorkMail action.
+
+### Creating the resources manually
 
 Create an SNS topic `stalwart-mirror` and a standard SQS queue `stalwart-mirror` in us-east-1 with a dead-letter queue (maxReceiveCount 5) and sufficient retention (for example 14 days). Subscribe the queue to the topic with **raw message delivery OFF**. The queue policy should allow `sqs:SendMessage` only from that SNS topic, and the topic policy should allow SES publishing only from your account's intended receipt rule. Use a dedicated queue, not one shared with another consumer.
 

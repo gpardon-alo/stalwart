@@ -3,8 +3,9 @@ Description: Optional SES S3 notification queue for parallel Stalwart imports; d
 Parameters:
   ReceiptRuleArns:
     Type: CommaDelimitedList
-    Description: Exact existing SES receipt rule ARNs allowed to publish notifications (comma-separated).
-    AllowedPattern: 'arn:aws:ses:us-east-1:[0-9]{12}:receipt-rule-set/.+:receipt-rule/.+'
+    Description: Comma-separated SES rule ARNs. To authorize all rules in a named set, use arn:aws:ses:us-east-1:ACCOUNT:receipt-rule-set/SET:receipt-rule/* . Supports multiple sets; does not activate them.
+    AllowedPattern: 'arn:aws:ses:us-east-1:[0-9]{12}:receipt-rule-set/[A-Za-z0-9_.-]+:receipt-rule/([A-Za-z0-9_.-]+|\*)'
+    ConstraintDescription: Supply full us-east-1 receipt-rule ARNs, using an exact rule name or * for all rules in one explicitly named set.
 Resources:
   DeadLetters:
     Type: AWS::SQS::Queue
@@ -42,7 +43,7 @@ Resources:
             Condition:
               StringEquals:
                 AWS:SourceAccount: !Ref AWS::AccountId
-              ArnEquals:
+              ArnLike:
                 AWS:SourceArn: !Ref ReceiptRuleArns
   QueuePolicy:
     Type: AWS::SQS::QueuePolicy
