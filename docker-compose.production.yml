@@ -1,0 +1,33 @@
+name: stalwart
+services:
+  mail:
+    image: ${STALWART_IMAGE:?Set STALWART_IMAGE to the reviewed image tag or digest}
+    restart: unless-stopped
+    stop_grace_period: 120s
+    environment:
+      STALWART_PUBLIC_URL: ${STALWART_PUBLIC_URL:?Set STALWART_PUBLIC_URL}
+    ports:
+      - "127.0.0.1:${STALWART_ADMIN_PORT:-8080}:8080"
+      - "${STALWART_HTTPS_BIND:-0.0.0.0}:${STALWART_HTTPS_PORT:-443}:443"
+      - "25:25"
+      - "465:465"
+      - "587:587"
+      - "993:993"
+    volumes:
+      - config:/etc/stalwart
+      - data:/var/lib/stalwart
+    networks:
+      default:
+        aliases:
+          - stalwart-mail
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  config:
+  data:
+networks:
+  default:
+    name: stalwart-mail

@@ -1,0 +1,118 @@
+name: Deploy personal Stalwart
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/deploy.yml
+      - docker-compose.production.yml
+      - deploy/lightsail/**
+      - .env.production.example
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stalwart-lightsail-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'gpardon-alo/stalwart'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Validate deployment files
+        run: |
+          bash -n deploy/lightsail/deploy.sh deploy/lightsail/backup.sh
+          docker compose --env-file .env.production.example -f docker-compose.production.yml config --quiet
+
+  preflight:
+    if: github.repository == 'gpardon-alo/stalwart' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require deployment configuration
+        env:
+          HOST: ${{ secrets.LIGHTSAIL_HOST }}
+          KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          FINGERPRINT: ${{ secrets.LIGHTSAIL_FINGERPRINT }}
+        run: |
+          for name in HOST KEY FINGERPRINT; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Configure LIGHTSAIL_HOST, LIGHTSAIL_SSH_KEY and LIGHTSAIL_FINGERPRINT repository secrets."
+              exit 1
+            fi
+          done
+
+  build:
+    needs: preflight
+    # For a Graviton/ARM Lightsail host, set LIGHTSAIL_RUNNER=ubuntu-24.04-arm.
+    runs-on: ${{ vars.LIGHTSAIL_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ghcr.io/gpardon-alo/stalwart@${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: docker/setup-buildx-action@v3
+      - name: Authenticate to this fork's registry
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+      - name: Build fork source and publish immutable revision
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ghcr.io/gpardon-alo/stalwart:sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    env:
+      LIGHTSAIL_HOST: ${{ secrets.LIGHTSAIL_HOST }}
+      LIGHTSAIL_SSH_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+      LIGHTSAIL_FINGERPRINT: ${{ secrets.LIGHTSAIL_FINGERPRINT }}
+    steps:
+      - name: Deploy to Lightsail
+        uses: appleboy/ssh-action@v1.2.4
+        env:
+          DEPLOY_IMAGE: ${{ needs.build.outputs.image }}
+          DEPLOY_SHA: ${{ github.sha }}
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+        with:
+          host: ${{ env.LIGHTSAIL_HOST }}
+          username: ${{ vars.LIGHTSAIL_USER || 'ubuntu' }}
+          key: ${{ env.LIGHTSAIL_SSH_KEY }}
+          fingerprint: ${{ env.LIGHTSAIL_FINGERPRINT }}
+          port: 22
+          command_timeout: 15m
+          envs: DEPLOY_IMAGE,DEPLOY_SHA,GHCR_TOKEN,GHCR_USER
+          script: |
+            set -eu
+            cd ~/stalwart
+            test "$(git remote get-url origin)" = 'https://github.com/gpardon-alo/stalwart.git'
+            git diff --quiet
+            git diff --cached --quiet
+            git fetch origin "$DEPLOY_SHA"
+            git checkout --detach "$DEPLOY_SHA"
+            DOCKER_CONFIG=$(mktemp -d)
+            export DOCKER_CONFIG
+            trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+            printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            bash deploy/lightsail/deploy.sh "$DEPLOY_IMAGE"

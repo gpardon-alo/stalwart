@@ -8,3 +8,7 @@ run.sh
 !.github
 !.cargo
 CLAUDE.md
+
+# Personal Lightsail deployment
+!.env.production.example
+/backups/
