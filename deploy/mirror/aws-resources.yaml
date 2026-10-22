@@ -25,8 +25,15 @@ Parameters:
     Default: ''
     Description: Optional exact KMS key ARN for S3 server-side encryption. Leave empty for SSE-S3. SES client-side encryption is not supported.
     AllowedPattern: '(^$|arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key/[A-Za-z0-9-]+)'
+  ExistingS3ActionRoleNames:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: Optional existing IAM role names selected in the SES Deliver to S3 actions (comma-separated, names only). Grants these roles permission to publish to this stack's SNS topic. Leave empty if no role is selected.
+    AllowedPattern: '(^$|[A-Za-z0-9_+=.@-]{1,64})'
+    ConstraintDescription: Supply IAM role names, not ARNs or paths; separate multiple names with commas.
 Conditions:
   HasSourceKmsKey: !Not [!Equals [!Ref SourceKmsKeyArn, '']]
+  HasExistingS3ActionRoles: !Not [!Equals [!Join ['', !Ref ExistingS3ActionRoleNames], '']]
 Resources:
   DeadLetters:
     Type: AWS::SQS::Queue
@@ -89,6 +96,18 @@ Resources:
       Protocol: sqs
       Endpoint: !GetAtt Queue.Arn
       RawMessageDelivery: false
+  SesS3NotificationPolicy:
+    Type: AWS::IAM::Policy
+    Condition: HasExistingS3ActionRoles
+    Properties:
+      PolicyName: StalwartMirrorTopicPublish
+      Roles: !Ref ExistingS3ActionRoleNames
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: sns:Publish
+            Resource: !Ref Topic
   ImporterUser:
     Type: AWS::IAM::User
     Properties:

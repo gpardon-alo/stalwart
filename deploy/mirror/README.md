@@ -32,6 +32,35 @@ not generated or exposed in stack outputs. If updating a stack created with the
 older template, upload the new template and provide the new bucket/prefix
 parameters. Existing resources and receipt rules remain in place.
 
+### SES reports "Could not publish to SNS topic"
+
+Use a CloudFormation stack update to correct permissions. Do not edit the topic
+or IAM policies manually. Keep `ReceiptRuleArns` set to the intended exact rules
+or named-set wildcard patterns; the stack uses `ArnLike` to match them.
+
+An SES **Deliver to S3** action may have an IAM role selected. In that mode AWS
+uses **only that role**, including for the SNS publish operation. Granting
+`ses.amazonaws.com` access in the topic policy alone does not grant the role its
+missing identity permission. Inspect the action to read its role name, then set
+`ExistingS3ActionRoleNames` in the stack update to that name. If the two actions
+use different roles, provide both names separated by a comma. If they share one
+role, provide it once. This is an existing SES delivery role, **not** the mirror
+importer's IAM user.
+
+The stack attaches a separate inline policy granting only `sns:Publish` on this
+topic to those roles. It leaves their S3/KMS policies, trust relationships,
+WorkMail actions and receipt rules intact. Leave the parameter empty when SES
+has no role selected. Do not remove a working S3 role to bypass this error.
+
+This handles the role-based publish path; it does not prove that is the cause
+of every publish error. If the error persists, verify the deployed stack's
+parameters, region and status, and check topic encryption through read-only
+inspection before making another CloudFormation change. The template does not
+configure SNS KMS encryption. Existing explicit denies or incompatible KMS key
+policies can still prevent publishing.
+
+Reference: [AWS SES S3-action role behavior](https://docs.aws.amazon.com/ses/latest/APIReference/API_S3Action.html).
+
 ### Authorizing two receipt rule sets
 
 `ReceiptRuleArns` accepts exact rule ARNs or a `*` in the rule-name position to
@@ -51,9 +80,11 @@ or switch sets. If both domains receive in the same account/region, verify wheth
 they are actually two rules within the same active set. Select the topic in each
 relevant S3 action when ready, retaining its existing WorkMail action.
 
-### Creating the resources manually
+### If resources were created manually before using this template
 
-Create an SNS topic `stalwart-mirror` and a standard SQS queue `stalwart-mirror` in us-east-1 with a dead-letter queue (maxReceiveCount 5) and sufficient retention (for example 14 days). Subscribe the queue to the topic with **raw message delivery OFF**. The queue policy should allow `sqs:SendMessage` only from that SNS topic, and the topic policy should allow SES publishing only from your account's intended receipt rule. Use a dedicated queue, not one shared with another consumer.
+Prefer CloudFormation for creating and updating all mirror resources and policies. The following describes the required configuration for an existing installation; do not make ad hoc policy edits to CloudFormation-managed resources.
+
+The setup requires an SNS topic `stalwart-mirror` and a standard SQS queue `stalwart-mirror` in us-east-1 with a dead-letter queue (maxReceiveCount 5) and sufficient retention (for example 14 days). Subscribe the queue to the topic with **raw message delivery OFF**. The queue policy should allow `sqs:SendMessage` only from that SNS topic, and the topic policy should allow SES publishing only from your account's intended receipt rule. Use a dedicated queue, not one shared with another consumer.
 
 In the existing SES **Deliver to S3 bucket** action, select that topic. Retain the WorkMail action and all existing recipient conditions. Check the AWS policies and send one test first: receipt-action errors can affect mail handling. This adds metadata notifications for future mail; it does not replay the S3 archive or require another SMTP receiving action. Do not use S3 ObjectCreated notifications for this worker, since those omit SES envelope recipients.
 
