@@ -13,8 +13,7 @@ section. Both views use the same badge renderer, results, tooltips, and colors.
 Messages without authentication results or a spam score have no collapsed section.
 
 The patch is pinned to upstream commit
-`d1f4ccaccff840a43471d40e645453e0dcfcfef4` (Bulwark 1.17.1). The personal deployment workflow builds
-and installs this pinned version with the customization. These changes are local until committed and pushed to main.
+`d1f4ccaccff840a43471d40e645453e0dcfcfef4` (Bulwark 1.17.1).
 
 ## Build
 
@@ -33,11 +32,20 @@ This script does not upload the bundle or change a running server.
 
 ## Automatic deployment
 
-The personal deployment workflow builds this bundle before building the mail
-server image. The Dockerfile includes the bundle, and the Lightsail deployment
-activates it only after the new mail container passes its health check. A failed
-webmail build prevents the image from being deployed. No public release or
-separate bundle hosting is needed.
+**Deploy personal webmail** (`.github/workflows/deploy-webmail.yml`) runs on
+main pushes touching `deploy/webmail/**` or its own workflow. It builds the
+patched ZIP, transfers it and its installer to a unique temporary directory on
+Lightsail, and activates the bundle in the running mail container. It does not
+build a server image, restart the mail container, or change the server's Git
+checkout. Manual runs are also available on main. Pull requests run validation
+without deployment. Build artifacts are retained for seven days.
+
+**Deploy personal Stalwart** remains responsible for server source, Docker,
+Compose, and Lightsail server deployment files. It no longer builds or installs
+webmail. A push changing both areas triggers both workflows. Each workflow
+serializes its own runs; both deployment scripts use the same host lock, so
+server replacement and webmail activation cannot run concurrently. Builds may
+run concurrently.
 
 Set this GitHub repository secret once:
 
@@ -55,10 +63,10 @@ Optional GitHub repository variables:
 - `STALWART_WEBMAIL_PREFIX`: the existing webmail Application's URL prefix;
   default `/webmail`.
 
-Before replacing the server, the deployment checks that the admin API is
+Before activating webmail, the installer checks that the admin API is
 reachable and exactly one enabled Application matches the configured prefix.
 It preserves that Application's prefixes and OAuth settings and changes only
-`resourceUrl`. It copies the image's bundle to the persistent data volume at
+`resourceUrl`. It writes the uploaded bundle atomically to the persistent data volume at
 `/var/lib/stalwart/custom-webmail/COMMIT.zip`, runs `UpdateApps`, and verifies the
 entry page contains the exact deployment revision. If activation or verification
 fails, it restores the previous resource URL and reloads applications. A failure
@@ -68,11 +76,19 @@ its database. Old revision bundles remain available for webmail rollback.
 The installer requires an existing webmail Application. Initial server and
 webmail setup must be completed before enabling this deployment workflow.
 
-For a manual build to use with the production Dockerfile, set
-`WEBMAIL_DEPLOY_REVISION` to the full commit SHA when running `build.sh`. Manual
-runs of `deploy/lightsail/deploy.sh` also require `DEPLOY_SHA` and the admin
-configuration above in the environment. The deployment script handles the server
-and webmail activation under the same lock.
+For a manual build, set `WEBMAIL_DEPLOY_REVISION` to the full commit SHA when
+running `build.sh`. Transfer `install.py`, `deploy.sh`, and the ZIP together to a
+temporary directory on Lightsail, then run:
+
+```sh
+bash /path/to/upload/deploy.sh /path/to/upload/bulwark-lite-stalwart.zip FULL_COMMIT_SHA
+```
+
+Set the admin configuration above in the host environment. The deployment root
+defaults to `$HOME/stalwart`; override with `STALWART_DEPLOY_ROOT` for a different
+server checkout. The script identifies the running Compose service by project
+`stalwart` and service `mail`, and waits up to 15 minutes for the server's
+deployment lock. It leaves both the running image and its Git checkout intact.
 
 ## Badge colors
 
@@ -89,17 +105,14 @@ Bulwark's `lib/email-headers.ts`, `getSecurityStatus`, defines:
 failure. The patch preserves this behavior. The separate spam-score badge is red
 above 5, amber above 2 through 5, and green at 2 or below.
 
-## Local validation
+## Validation
 
 - Patch applies cleanly to the pinned source revision.
-- TypeScript validation passed.
-- Existing email-header and viewer/plugin regression tests passed: 67 tests.
-- Production bundle generation was attempted but could not finish in this
-  execution environment: Turbopack's CSS processing worker could not bind a
-  local port (`Operation not permitted`). No bundle was produced or deployed.
-- Eight deployment regression tests passed, including rejected changes, bundle
-  mismatches, verification failure, and restoration of the previous resource URL.
-- Workflow YAML parses, shell syntax checks pass, and Compose configuration
-  validates. A Docker packaging check confirms the archive is included despite
-  the restrictive build context. A live GitHub Actions run has not been performed.
+- TypeScript validation and 67 upstream regression tests passed. The customized
+  webmail production build also succeeded in GitHub Actions for commit
+  `22cad8d31535279d29218e89eab310d9a51ed0f9`.
+- Ten installer regression tests cover uploaded and image-bundled ZIPs, corrupt
+  uploads, revision mismatches, rejected changes, and webmail rollback.
+- Workflow YAML and shell syntax are checked locally. Server Compose validation
+  is retained in its own workflow.
 - Browser layout has not been visually verified against a running instance.

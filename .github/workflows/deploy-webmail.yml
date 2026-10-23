@@ -1,0 +1,110 @@
+name: Deploy personal webmail
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/deploy-webmail.yml
+      - deploy/webmail/**
+  pull_request:
+    paths:
+      - .github/workflows/deploy-webmail.yml
+      - deploy/webmail/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize webmail runs; the host lock also serializes server deployments.
+concurrency:
+  group: stalwart-webmail-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'gpardon-alo/stalwart'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Validate webmail installer
+        run: |
+          bash -n deploy/webmail/build.sh deploy/webmail/deploy.sh
+          python3 -m unittest discover -s deploy/webmail -p 'test_*.py' -v
+
+  build:
+    needs: validate
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Require deployment configuration
+        env:
+          HOST: ${{ secrets.LIGHTSAIL_HOST }}
+          KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          FINGERPRINT: ${{ secrets.LIGHTSAIL_FINGERPRINT }}
+          WEBMAIL_AUTH: ${{ secrets.STALWART_ADMIN_AUTHORIZATION }}
+        run: |
+          for name in HOST KEY FINGERPRINT WEBMAIL_AUTH; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing deployment configuration: $name"
+              exit 1
+            fi
+          done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Build and validate customized webmail
+        env:
+          WEBMAIL_DEPLOY_REVISION: ${{ github.sha }}
+        run: bash deploy/webmail/build.sh
+      - name: Package deployment scripts
+        run: cp deploy/webmail/install.py deploy/webmail/deploy.sh deploy/webmail/dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webmail-${{ github.sha }}
+          path: deploy/webmail/dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: webmail-${{ github.sha }}
+          path: bundle
+      - name: Upload webmail to Lightsail
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.LIGHTSAIL_HOST }}
+          username: ${{ vars.LIGHTSAIL_USER || 'ubuntu' }}
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          fingerprint: ${{ secrets.LIGHTSAIL_FINGERPRINT }}
+          port: 22
+          source: bundle/*
+          target: /tmp/stalwart-webmail-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          strip_components: 1
+      - name: Activate and verify webmail without restarting mail
+        uses: appleboy/ssh-action@v1.2.4
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+          DEPLOY_RUN: ${{ github.run_id }}-${{ github.run_attempt }}
+          STALWART_ADMIN_AUTHORIZATION: ${{ secrets.STALWART_ADMIN_AUTHORIZATION }}
+          STALWART_ADMIN_URL: ${{ vars.STALWART_ADMIN_URL || 'http://127.0.0.1:8080' }}
+          STALWART_WEBMAIL_PREFIX: ${{ vars.STALWART_WEBMAIL_PREFIX || '/webmail' }}
+        with:
+          host: ${{ secrets.LIGHTSAIL_HOST }}
+          username: ${{ vars.LIGHTSAIL_USER || 'ubuntu' }}
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          fingerprint: ${{ secrets.LIGHTSAIL_FINGERPRINT }}
+          port: 22
+          command_timeout: 20m
+          envs: DEPLOY_SHA,DEPLOY_RUN,STALWART_ADMIN_AUTHORIZATION,STALWART_ADMIN_URL,STALWART_WEBMAIL_PREFIX
+          script: |
+            set -eu
+            staging="/tmp/stalwart-webmail-$DEPLOY_SHA-$DEPLOY_RUN"
+            trap 'rm -rf "$staging"' EXIT
+            bash "$staging/deploy.sh" "$staging/bulwark-lite-stalwart.zip" "$DEPLOY_SHA"

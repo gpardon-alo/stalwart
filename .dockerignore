@@ -9,12 +9,3 @@
 !.cargo
 !Cargo.lock
 !Cargo.toml
-
-# Customized webmail bundle built by the personal deployment workflow
-!deploy
-deploy/*
-!deploy/webmail
-deploy/webmail/*
-!deploy/webmail/dist
-deploy/webmail/dist/*
-!deploy/webmail/dist/bulwark-lite-stalwart.zip

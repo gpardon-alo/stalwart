@@ -6,7 +6,19 @@ This deploys **gpardon-alo/stalwart**, built from this fork's source. It does no
 
 GitHub Actions builds the fork using the upstream Dockerfile, publishes `ghcr.io/gpardon-alo/stalwart:sha-COMMIT`, and deploys its immutable digest over SSH. The host runs one container with persistent `stalwart_config` and `stalwart_data` Docker volumes. Before replacing an existing container, the deployment makes an offline backup and restarts the old container. The new container must pass the image's health check within 180 seconds.
 
-Main pushes deploy automatically after the configuration below is present. The image also includes the customized webmail bundle; configure its admin authorization secret and existing Application prefix as described in [the webmail deployment notes](../webmail/README.md#automatic-deployment). The workflow builds the webmail before building the server image, then activates and verifies it after the server health check. Manual runs are available through Actions on **main**. Other branches and other GitHub repositories cannot deploy through this workflow. No AWS credentials are needed by Actions. A new Lightsail host starts with empty volumes: your laptop's settings and mail are NOT copied automatically.
+Main pushes affecting server source, Docker/Compose configuration, or
+`deploy/lightsail/**` trigger this server deployment. Manual runs are available
+through Actions on **main**. Other branches and other GitHub repositories cannot
+deploy through this workflow. No AWS credentials are needed by Actions. A new
+Lightsail host starts with empty volumes: your laptop's settings and mail are
+NOT copied automatically.
+
+Webmail is deployed separately by **Deploy personal webmail**. Interface updates
+build and upload only the customized ZIP and reload web applications, leaving
+the mail container running. See [the webmail deployment notes](../webmail/README.md#automatic-deployment)
+for its admin authorization secret and Application prefix. Both deployment
+scripts share a host lock; server deployments preserve the installed webmail in
+the persistent data volume and do not replace it with a bundled copy.
 
 ## Prepare Lightsail
 

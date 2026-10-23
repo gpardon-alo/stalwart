@@ -3,22 +3,40 @@ name: Deploy personal Stalwart
 on:
   push:
     branches: [main]
+    paths:
+      - .github/workflows/deploy.yml
+      - Cargo.toml
+      - Cargo.lock
+      - tests/Cargo.toml
+      - .cargo/**
+      - crates/**
+      - resources/**
+      - Dockerfile
+      - .dockerignore
+      - docker-compose.production.yml
+      - deploy/lightsail/**
+      - .env.production.example
   workflow_dispatch:
   pull_request:
     paths:
       - .github/workflows/deploy.yml
-      - docker-compose.production.yml
-      - deploy/lightsail/**
-      - deploy/webmail/**
+      - Cargo.toml
+      - Cargo.lock
+      - tests/Cargo.toml
+      - .cargo/**
+      - crates/**
+      - resources/**
       - Dockerfile
       - .dockerignore
+      - docker-compose.production.yml
+      - deploy/lightsail/**
       - .env.production.example
 
 permissions:
   contents: read
 
 concurrency:
-  group: stalwart-lightsail-production
+  group: stalwart-server-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -29,8 +47,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Validate deployment files
         run: |
-          bash -n deploy/lightsail/deploy.sh deploy/lightsail/backup.sh deploy/webmail/build.sh
-          python3 -m unittest discover -s deploy/webmail -p 'test_*.py' -v
+          bash -n deploy/lightsail/deploy.sh deploy/lightsail/backup.sh
           docker compose --env-file .env.production.example -f docker-compose.production.yml config --quiet
 
   preflight:
@@ -43,11 +60,10 @@ jobs:
           HOST: ${{ secrets.LIGHTSAIL_HOST }}
           KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
           FINGERPRINT: ${{ secrets.LIGHTSAIL_FINGERPRINT }}
-          WEBMAIL_AUTH: ${{ secrets.STALWART_ADMIN_AUTHORIZATION }}
         run: |
-          for name in HOST KEY FINGERPRINT WEBMAIL_AUTH; do
+          for name in HOST KEY FINGERPRINT; do
             if [ -z "${!name}" ]; then
-              echo "::error::Configure LIGHTSAIL_HOST, LIGHTSAIL_SSH_KEY, LIGHTSAIL_FINGERPRINT and STALWART_ADMIN_AUTHORIZATION repository secrets."
+              echo "::error::Configure LIGHTSAIL_HOST, LIGHTSAIL_SSH_KEY, and LIGHTSAIL_FINGERPRINT repository secrets."
               exit 1
             fi
           done
@@ -64,13 +80,6 @@ jobs:
       image: ghcr.io/gpardon-alo/stalwart@${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - name: Build and validate customized webmail
-        env:
-          WEBMAIL_DEPLOY_REVISION: ${{ github.sha }}
-        run: bash deploy/webmail/build.sh
       - uses: docker/setup-buildx-action@v3
       - name: Authenticate to this fork's registry
         env:
@@ -107,9 +116,6 @@ jobs:
           DEPLOY_SHA: ${{ github.sha }}
           GHCR_TOKEN: ${{ github.token }}
           GHCR_USER: ${{ github.actor }}
-          STALWART_ADMIN_AUTHORIZATION: ${{ secrets.STALWART_ADMIN_AUTHORIZATION }}
-          STALWART_ADMIN_URL: ${{ vars.STALWART_ADMIN_URL || 'http://127.0.0.1:8080' }}
-          STALWART_WEBMAIL_PREFIX: ${{ vars.STALWART_WEBMAIL_PREFIX || '/webmail' }}
         with:
           host: ${{ env.LIGHTSAIL_HOST }}
           username: ${{ vars.LIGHTSAIL_USER || 'ubuntu' }}
@@ -117,7 +123,7 @@ jobs:
           fingerprint: ${{ env.LIGHTSAIL_FINGERPRINT }}
           port: 22
           command_timeout: 15m
-          envs: DEPLOY_IMAGE,DEPLOY_SHA,GHCR_TOKEN,GHCR_USER,STALWART_ADMIN_AUTHORIZATION,STALWART_ADMIN_URL,STALWART_WEBMAIL_PREFIX
+          envs: DEPLOY_IMAGE,DEPLOY_SHA,GHCR_TOKEN,GHCR_USER
           script: |
             set -eu
             cd ~/stalwart

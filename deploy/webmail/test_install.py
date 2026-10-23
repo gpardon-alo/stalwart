@@ -2,6 +2,7 @@ import importlib.util
 import io
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 import zipfile
@@ -61,6 +62,32 @@ class DeploymentTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'reload failed'):
             module.install(client, APP, '/webmail', 'container', REVISION)
         self.assertEqual(client.activate.call_args_list[-1].args, (APP, APP['resourceUrl']))
+
+    @patch.object(module.subprocess, 'run')
+    def test_uploaded_bundle_works_without_an_image_bundle(self, run):
+        data = bundle().stdout
+        client = Mock()
+        client.request.return_value = MARKER
+        with tempfile.NamedTemporaryFile(suffix='.zip') as archive:
+            archive.write(data)
+            archive.flush()
+            module.install(client, APP, '/webmail', 'running-container', REVISION, archive.name)
+        self.assertEqual(run.call_count, 2)  # mkdir, atomic write; no image read.
+        write = run.call_args_list[-1]
+        self.assertEqual(write.kwargs['input'], data)
+        self.assertEqual(write.args[0][:4], ['docker', 'exec', '-i', 'running-container'])
+        client.activate.assert_called_once()
+
+    @patch.object(module.subprocess, 'run')
+    def test_corrupt_uploaded_bundle_never_touches_container_or_application(self, run):
+        client = Mock()
+        with tempfile.NamedTemporaryFile(suffix='.zip') as archive:
+            archive.write(b'broken upload')
+            archive.flush()
+            with self.assertRaises(zipfile.BadZipFile):
+                module.install(client, APP, '/webmail', 'running-container', REVISION, archive.name)
+        run.assert_not_called()
+        client.activate.assert_not_called()
 
     def test_ambiguous_application_is_rejected(self):
         client = object.__new__(module.Client)

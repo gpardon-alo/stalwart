@@ -4,6 +4,7 @@ import argparse
 import io
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -93,11 +94,12 @@ class Client:
             raise RuntimeError('UpdateApps was not acknowledged')
 
 
-def install(client, app, prefix, container, revision):
+def install(client, app, prefix, container, revision, bundle_path=None):
     if not re.fullmatch(r'[a-f0-9]{40}', revision):
         raise RuntimeError('Deployment revision must be a full Git commit SHA')
     source = '/usr/local/share/stalwart/webmail.zip'
-    bundle = subprocess.run(['docker', 'exec', container, 'cat', source], check=True, capture_output=True).stdout
+    bundle = (Path(bundle_path).read_bytes() if bundle_path else
+              subprocess.run(['docker', 'exec', container, 'cat', source], check=True, capture_output=True).stdout)
     marker = f'<meta name="stalwart-webmail-revision" content="{revision}">'
     with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
         if archive.testzip() is not None or marker not in archive.read('index.html').decode():
@@ -107,7 +109,14 @@ def install(client, app, prefix, container, revision):
     directory = '/var/lib/stalwart/custom-webmail'
     target = directory + '/' + revision + '.zip'
     subprocess.run(['docker', 'exec', container, 'mkdir', '-p', directory], check=True)
-    subprocess.run(['docker', 'exec', container, 'cp', source, target], check=True)
+    # Write as the container's normal user, then rename atomically. This
+    # avoids unreadable ownership from docker cp and keeps partial uploads
+    # from replacing a previously installed revision.
+    subprocess.run([
+        'docker', 'exec', '-i', container, 'sh', '-c',
+        'umask 022; cat > "$1" && mv "$1" "$2"',
+        'sh', target + '.upload', target,
+    ], input=bundle, check=True)
     old_resource = app['resourceUrl']
     try:
         client.activate(app, 'file://' + target)
@@ -134,6 +143,7 @@ def main():
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--container')
     parser.add_argument('--revision')
+    parser.add_argument('--bundle', help='Uploaded webmail ZIP; does not require a bundled server image')
     args = parser.parse_args()
     prefix = '/' + os.environ.get('STALWART_WEBMAIL_PREFIX', '/webmail').strip('/')
     if not re.fullmatch(r'/[A-Za-z0-9_-]+', prefix) or prefix in ('/admin', '/account', '/jmap', '/auth', '/api'):
@@ -145,7 +155,7 @@ def main():
         return
     if not args.container or not args.revision:
         parser.error('--container and --revision are required unless --check is used')
-    install(client, app, prefix, args.container, args.revision)
+    install(client, app, prefix, args.container, args.revision, args.bundle)
 
 
 if __name__ == '__main__':

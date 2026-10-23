@@ -35,7 +35,6 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
     chown stalwart:stalwart /etc/stalwart /var/lib/stalwart
 COPY --from=builder --chmod=0755 /output/stalwart /usr/local/bin/stalwart
 RUN setcap 'cap_net_bind_service=+ep' /usr/local/bin/stalwart
-COPY --chmod=0644 deploy/webmail/dist/bulwark-lite-stalwart.zip /usr/local/share/stalwart/webmail.zip
 USER stalwart
 WORKDIR /var/lib/stalwart
 VOLUME ["/etc/stalwart", "/var/lib/stalwart"]
