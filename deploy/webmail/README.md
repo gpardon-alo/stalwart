@@ -111,8 +111,13 @@ above 5, amber above 2 through 5, and green at 2 or below.
 - TypeScript validation and 67 upstream regression tests passed. The customized
   webmail production build also succeeded in GitHub Actions for commit
   `22cad8d31535279d29218e89eab310d9a51ed0f9`.
-- Ten installer regression tests cover uploaded and image-bundled ZIPs, corrupt
+- Thirteen deployment regression tests cover uploaded and image-bundled ZIPs, corrupt
   uploads, revision mismatches, rejected changes, and webmail rollback.
 - Workflow YAML and shell syntax are checked locally. Server Compose validation
   is retained in its own workflow.
 - Browser layout has not been visually verified against a running instance.
+
+The upload uses OpenSSH with the server's pinned Ed25519 key. The scanned key
+must match `LIGHTSAIL_FINGERPRINT` before any SSH login or file transfer. Admin
+configuration travels over encrypted SSH stdin, is passed to the installer in
+its process environment, and is never written to a credential file on Lightsail.
