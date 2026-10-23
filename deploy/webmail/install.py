@@ -32,7 +32,9 @@ class Client:
         if not self.authorization.startswith(('Bearer ', 'Basic ')) or any(c in self.authorization for c in '\r\n'):
             raise RuntimeError('Set STALWART_ADMIN_AUTHORIZATION to a Basic or Bearer admin authorization header')
         self.opener = urllib.request.build_opener(NoRedirect)
-        session = self.request('/.well-known/jmap', authenticated=True)
+        # Stalwart redirects discovery to this path. Request it directly so
+        # admin credentials never need to follow an HTTP redirect.
+        session = self.request('/jmap/session', authenticated=True)
         self.account = session.get('primaryAccounts', {}).get('urn:ietf:params:jmap:mail')
         if not self.account:
             accounts = session.get('accounts', {})
