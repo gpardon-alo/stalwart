@@ -1,0 +1,305 @@
+diff --git a/components/email/email-viewer.tsx b/components/email/email-viewer.tsx
+index 5d30882..08c33e0 100644
+--- a/components/email/email-viewer.tsx
++++ b/components/email/email-viewer.tsx
+@@ -4517,6 +4517,136 @@ export function EmailViewer({
+     </div>
+   );
+
++  // Share the same results, tooltips, and colors between the collapsed
++  // sender header and expanded message details.
++  const renderAuthenticationBadges = () => {
++    const auth = email.authenticationResults;
++    const translateAuthResult = (result?: string) => {
++      const r = (result || '').toLowerCase();
++      switch (r) {
++        case 'pass': return t('authentication.result.pass');
++        case 'fail': return t('authentication.result.fail');
++        case 'softfail': return t('authentication.result.softfail');
++        case 'neutral': return t('authentication.result.neutral');
++        case 'permerror': return t('authentication.result.permerror');
++        case 'temperror': return t('authentication.result.temperror');
++        case 'none': return t('authentication.result.none');
++        default: return result || '';
++      }
++    };
++    const AuthChip = ({ name, result, extra, tooltip }: { name: string; result?: string; extra?: React.ReactNode; tooltip?: string }) => {
++      if (!result) return null;
++      const status = getSecurityStatus(result);
++      const Icon = status.icon === 'check' ? Check
++        : status.icon === 'x' ? X
++        : status.icon === 'alert' ? AlertTriangle
++        : Minus;
++      return (
++        <span
++          className={cn(
++            "inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs",
++            tooltip && "cursor-help",
++            status.icon === 'check' && "bg-green-500/[0.07] border-green-500/30",
++            status.icon === 'x' && "bg-red-500/[0.07] border-red-500/30",
++            status.icon === 'alert' && "bg-amber-500/[0.07] border-amber-500/30",
++            status.icon === 'minus' && "bg-muted/40 border-border",
++          )}
++          title={tooltip}
++        >
++          <Icon className={cn("w-3.5 h-3.5 flex-shrink-0", status.color)} />
++          <span className="font-medium text-foreground">{name}</span>
++          <span className={cn("text-[10px] uppercase tracking-wider", status.color)}>
++            {translateAuthResult(result)}
++          </span>
++          {extra && (
++            <>
++              <span className="text-muted-foreground/50">·</span>
++              <span className="text-muted-foreground">{extra}</span>
++            </>
++          )}
++        </span>
++      );
++    };
++
++    return (
++      <div className="flex flex-wrap gap-1.5">
++        {auth?.spf && (() => {
++          // When multiple identities (HELO + MAIL FROM) were
++          // evaluated, list each result in the tooltip for full
++          // transparency; the chip itself shows the most severe.
++          const breakdown = auth.spf.all && auth.spf.all.length > 1
++            ? auth.spf.all
++                .map((r) => {
++                  const label = r.identity === 'mailfrom' ? 'MAIL FROM' : r.identity === 'helo' ? 'HELO' : 'SPF';
++                  return `${label}: ${translateAuthResult(r.result)}${r.domain ? ` (${r.domain})` : ''}`;
++                })
++                .join('\n')
++            : null;
++          return (
++            <AuthChip
++              name="SPF"
++              result={auth.spf.result}
++              extra={auth.spf.domain}
++              tooltip={breakdown ? `${t('authentication.tooltip_spf')}\n\n${breakdown}` : t('authentication.tooltip_spf')}
++            />
++          );
++        })()}
++        {auth?.dkim && (
++          <AuthChip name="DKIM" result={auth.dkim.result} extra={auth.dkim.domain} tooltip={t('authentication.tooltip_dkim')} />
++        )}
++        {auth?.dmarc && (
++          <AuthChip name="DMARC" result={auth.dmarc.result} extra={auth.dmarc.policy ? `${t('authentication.policy').toLowerCase()}: ${auth.dmarc.policy}` : undefined} tooltip={t('authentication.tooltip_dmarc')} />
++        )}
++        {auth?.iprev && (
++          <AuthChip name={t('details.iprev')} result={auth.iprev.result} extra={auth.iprev.ip} />
++        )}
++        {email.spamScore !== undefined && (
++          <span className={cn(
++            "inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs",
++            email.spamScore > 5 ? "bg-red-500/[0.07] border-red-500/30" :
++            email.spamScore > 2 ? "bg-amber-500/[0.07] border-amber-500/30" :
++            "bg-green-500/[0.07] border-green-500/30",
++          )}>
++            <Shield className={cn(
++              "w-3.5 h-3.5",
++              email.spamScore > 5 ? "text-red-700 dark:text-red-400" :
++              email.spamScore > 2 ? "text-amber-700 dark:text-amber-400" :
++              "text-green-700 dark:text-green-400",
++            )} />
++            <span className="font-medium text-foreground">{t('authentication.spam_score')}</span>
++            <span className={cn(
++              "text-[10px] uppercase tracking-wider",
++              email.spamScore > 5 ? "text-red-700 dark:text-red-400" :
++              email.spamScore > 2 ? "text-amber-700 dark:text-amber-400" :
++              "text-green-700 dark:text-green-400",
++            )}>
++              {email.spamScore.toFixed(1)}
++            </span>
++            {email.spamStatus && (
++              <>
++                <span className="text-muted-foreground/50">·</span>
++                <span className="text-muted-foreground">{email.spamStatus}</span>
++              </>
++            )}
++          </span>
++        )}
++      </div>
++    );
++  };
++
++  const collapsedAuthentication = !showFullHeaders && (
++    email.authenticationResults?.spf || email.authenticationResults?.dkim ||
++    email.authenticationResults?.dmarc || email.authenticationResults?.iprev ||
++    email.spamScore !== undefined
++  ) ? (
++    <section className="min-w-0" aria-label={t('details.authentication_security')}>
++      <div className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase mb-1.5">
++        {t('details.authentication_security')}
++      </div>
++      {renderAuthenticationBadges()}
++    </section>
++  ) : null;
++
+   return (
+     <div
+       ref={setViewerRootEl}
+@@ -4983,8 +5113,8 @@ export function EmailViewer({
+               />
+             </button>
+
+-            <div className="flex-1 min-w-0 flex gap-4">
+-              <div className="flex-1 min-w-0">
++            <div className="flex-1 min-w-0 flex flex-wrap gap-4">
++              <div className="flex-1 min-w-0 basis-64">
+               {/* Row 1: Sender name + badges */}
+               <div>
+                 <div className="min-w-0">
+@@ -5108,6 +5238,11 @@ export function EmailViewer({
+
+
+               </div>
++              {collapsedAuthentication && (
++                <div className="ms-auto min-w-0 max-w-full basis-72 grow" data-collapsed-auth="desktop">
++                  {collapsedAuthentication}
++                </div>
++              )}
+               {/* Attachments on the right (beside-sender mode) */}
+               {attachmentPosition === 'beside-sender' && effectiveAttachments.length > 0 && (
+                 <div className="relative flex flex-col items-end justify-start gap-1 flex-shrink-0 max-w-[50%]">
+@@ -5362,23 +5497,16 @@ export function EmailViewer({
+           </div>
+         </div>
+
++        {collapsedAuthentication && (
++          <div className="lg:hidden flex justify-end bg-background border-b border-border px-4 py-3" data-collapsed-auth="mobile">
++            {collapsedAuthentication}
++          </div>
++        )}
++
+         <PluginSlot name="reader-below-subject" className="w-full bg-background" extraProps={pluginEmailProps} />
+
+         {/* Expandable Details (shared across mobile/tablet/desktop) */}
+         {showFullHeaders && (() => {
+-          const translateAuthResult = (result?: string) => {
+-            const r = (result || '').toLowerCase();
+-            switch (r) {
+-              case 'pass': return t('authentication.result.pass');
+-              case 'fail': return t('authentication.result.fail');
+-              case 'softfail': return t('authentication.result.softfail');
+-              case 'neutral': return t('authentication.result.neutral');
+-              case 'permerror': return t('authentication.result.permerror');
+-              case 'temperror': return t('authentication.result.temperror');
+-              case 'none': return t('authentication.result.none');
+-              default: return result || '';
+-            }
+-          };
+           const replyToDifferent = !!email.replyTo?.length &&
+             (!email.from || email.replyTo[0].email !== email.from[0]?.email);
+           const deliveryDeltaMs = email.sentAt && email.receivedAt
+@@ -5416,40 +5544,6 @@ export function EmailViewer({
+               )}>{children}</dd>
+             </>
+           );
+-          const AuthChip = ({ name, result, extra, tooltip }: { name: string; result?: string; extra?: React.ReactNode; tooltip?: string }) => {
+-            if (!result) return null;
+-            const status = getSecurityStatus(result);
+-            const Icon = status.icon === 'check' ? Check
+-              : status.icon === 'x' ? X
+-              : status.icon === 'alert' ? AlertTriangle
+-              : Minus;
+-            return (
+-              <span
+-                className={cn(
+-                  "inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs",
+-                  tooltip && "cursor-help",
+-                  status.icon === 'check' && "bg-green-500/[0.07] border-green-500/30",
+-                  status.icon === 'x' && "bg-red-500/[0.07] border-red-500/30",
+-                  status.icon === 'alert' && "bg-amber-500/[0.07] border-amber-500/30",
+-                  status.icon === 'minus' && "bg-muted/40 border-border",
+-                )}
+-                title={tooltip}
+-              >
+-                <Icon className={cn("w-3.5 h-3.5 flex-shrink-0", status.color)} />
+-                <span className="font-medium text-foreground">{name}</span>
+-                <span className={cn("text-[10px] uppercase tracking-wider", status.color)}>
+-                  {translateAuthResult(result)}
+-                </span>
+-                {extra && (
+-                  <>
+-                    <span className="text-muted-foreground/50">·</span>
+-                    <span className="text-muted-foreground">{extra}</span>
+-                  </>
+-                )}
+-              </span>
+-            );
+-          };
+-
+           const hasIdentifiers = !!(email.messageId || email.inReplyTo?.length || email.references?.length || email.threadId);
+           const hasListInfo = !!(listHeaders?.listId || listHeaders?.listUnsubscribe || listHeaders?.listHelp || listHeaders?.listPost);
+           const hasAuthSection = !!(auth?.spf || auth?.dkim || auth?.dmarc || auth?.iprev || email.spamScore !== undefined || email.spamLLM);
+@@ -5540,68 +5634,7 @@ export function EmailViewer({
+                 {hasAuthSection && (
+                   <section className="min-w-0">
+                     <SectionHeader>{t('details.authentication_security')}</SectionHeader>
+-                    <div className="flex flex-wrap gap-1.5">
+-                      {auth?.spf && (() => {
+-                        // When multiple identities (HELO + MAIL FROM) were
+-                        // evaluated, list each result in the tooltip for full
+-                        // transparency; the chip itself shows the most severe.
+-                        const breakdown = auth.spf.all && auth.spf.all.length > 1
+-                          ? auth.spf.all
+-                              .map((r) => {
+-                                const label = r.identity === 'mailfrom' ? 'MAIL FROM' : r.identity === 'helo' ? 'HELO' : 'SPF';
+-                                return `${label}: ${translateAuthResult(r.result)}${r.domain ? ` (${r.domain})` : ''}`;
+-                              })
+-                              .join('\n')
+-                          : null;
+-                        return (
+-                          <AuthChip
+-                            name="SPF"
+-                            result={auth.spf.result}
+-                            extra={auth.spf.domain}
+-                            tooltip={breakdown ? `${t('authentication.tooltip_spf')}\n\n${breakdown}` : t('authentication.tooltip_spf')}
+-                          />
+-                        );
+-                      })()}
+-                      {auth?.dkim && (
+-                        <AuthChip name="DKIM" result={auth.dkim.result} extra={auth.dkim.domain} tooltip={t('authentication.tooltip_dkim')} />
+-                      )}
+-                      {auth?.dmarc && (
+-                        <AuthChip name="DMARC" result={auth.dmarc.result} extra={auth.dmarc.policy ? `${t('authentication.policy').toLowerCase()}: ${auth.dmarc.policy}` : undefined} tooltip={t('authentication.tooltip_dmarc')} />
+-                      )}
+-                      {auth?.iprev && (
+-                        <AuthChip name={t('details.iprev')} result={auth.iprev.result} extra={auth.iprev.ip} />
+-                      )}
+-                      {email.spamScore !== undefined && (
+-                        <span className={cn(
+-                          "inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs",
+-                          email.spamScore > 5 ? "bg-red-500/[0.07] border-red-500/30" :
+-                          email.spamScore > 2 ? "bg-amber-500/[0.07] border-amber-500/30" :
+-                          "bg-green-500/[0.07] border-green-500/30",
+-                        )}>
+-                          <Shield className={cn(
+-                            "w-3.5 h-3.5",
+-                            email.spamScore > 5 ? "text-red-700 dark:text-red-400" :
+-                            email.spamScore > 2 ? "text-amber-700 dark:text-amber-400" :
+-                            "text-green-700 dark:text-green-400",
+-                          )} />
+-                          <span className="font-medium text-foreground">{t('authentication.spam_score')}</span>
+-                          <span className={cn(
+-                            "text-[10px] uppercase tracking-wider",
+-                            email.spamScore > 5 ? "text-red-700 dark:text-red-400" :
+-                            email.spamScore > 2 ? "text-amber-700 dark:text-amber-400" :
+-                            "text-green-700 dark:text-green-400",
+-                          )}>
+-                            {email.spamScore.toFixed(1)}
+-                          </span>
+-                          {email.spamStatus && (
+-                            <>
+-                              <span className="text-muted-foreground/50">·</span>
+-                              <span className="text-muted-foreground">{email.spamStatus}</span>
+-                            </>
+-                          )}
+-                        </span>
+-                      )}
+-                    </div>
++                    {renderAuthenticationBadges()}
+                     {email.spamLLM && (
+                       <div className="mt-2 flex items-start gap-2 text-sm">
+                         {email.spamLLM.verdict === 'LEGITIMATE' ? <Brain className="w-4 h-4 mt-0.5 flex-shrink-0 text-green-700 dark:text-green-400" /> :
