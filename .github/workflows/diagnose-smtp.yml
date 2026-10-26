@@ -1,0 +1,40 @@
+name: Diagnose outbound SMTP
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    if: github.repository == 'gpardon-alo/stalwart'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Inspect saved relay and test authentication without sending mail
+        env:
+          SSH_HOST: ${{ secrets.LIGHTSAIL_HOST }}
+          SSH_USER: ${{ vars.LIGHTSAIL_USER || 'ubuntu' }}
+          SSH_PRIVATE_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          SSH_FINGERPRINT: ${{ secrets.LIGHTSAIL_FINGERPRINT }}
+          STALWART_ADMIN_AUTHORIZATION: ${{ secrets.STALWART_ADMIN_AUTHORIZATION }}
+          STALWART_ADMIN_URL: ${{ vars.STALWART_ADMIN_URL || 'http://127.0.0.1:8080' }}
+        run: |
+          set -euo pipefail
+          private_dir=$(mktemp -d)
+          trap 'rm -rf "$private_dir"' EXIT
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$private_dir/key"
+          chmod 600 "$private_dir/key"
+          ssh-keyscan -T 20 -t ed25519 "$SSH_HOST" > "$private_dir/known_hosts" 2>/dev/null
+          fingerprint=$(ssh-keygen -lf "$private_dir/known_hosts" -E sha256 | awk '{print $2}')
+          test "$fingerprint" = "$SSH_FINGERPRINT"
+          options=(-i "$private_dir/key" -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$private_dir/known_hosts" -o HostKeyAlgorithms=ssh-ed25519)
+          remote="$SSH_USER@$SSH_HOST"
+          staging="/tmp/stalwart-smtp-diagnose-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          ssh "${options[@]}" "$remote" "umask 077; mkdir -p '$staging'"
+          scp "${options[@]}" deploy/diagnostics/smtp.py deploy/webmail/install.py "$remote:$staging/"
+          python3 - "$private_dir/config.json" <<'PY'
+          import json, os, sys
+          with open(sys.argv[1], 'w') as output:
+              json.dump({k: os.environ[k] for k in ('STALWART_ADMIN_AUTHORIZATION', 'STALWART_ADMIN_URL')}, output)
+          PY
+          ssh "${options[@]}" "$remote" "trap 'rm -rf \"$staging\"' EXIT; python3 '$staging/smtp.py'" < "$private_dir/config.json"
