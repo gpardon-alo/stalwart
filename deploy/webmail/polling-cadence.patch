@@ -1,0 +1,194 @@
+diff --git a/lib/__tests__/jmap-client-polling-cadence.test.ts b/lib/__tests__/jmap-client-polling-cadence.test.ts
+new file mode 100644
+index 00000000..a9f0963f
+--- /dev/null
++++ b/lib/__tests__/jmap-client-polling-cadence.test.ts
+@@ -0,0 +1,125 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { JMAPClient } from '../jmap/client';
++
++const server = 'https://mail.example.test';
++const clients: JMAPClient[] = [];
++let fetchMock: ReturnType<typeof vi.fn>;
++let hidden = false;
++let emailState = 'e1';
++
++function session() {
++  return {
++    capabilities: { 'urn:ietf:params:jmap:core': {} },
++    accounts: { a: { name: 'test', isPersonal: true, accountCapabilities: {} } },
++    primaryAccounts: { 'urn:ietf:params:jmap:mail': 'a' },
++    apiUrl: `${server}/jmap/`,
++    downloadUrl: `${server}/jmap/download/{accountId}/{blobId}/{name}`,
++    uploadUrl: `${server}/jmap/upload/{accountId}/`,
++  };
++}
++
++function statePolls() {
++  return fetchMock.mock.calls.filter(([, init]) =>
++    typeof init?.body === 'string' && init.body.includes('Mailbox/get'));
++}
++
++async function connect() {
++  const client = new JMAPClient(server, 'test@example.test', 'test-only');
++  await client.connect();
++  clients.push(client);
++  return client;
++}
++
++beforeEach(() => {
++  vi.useFakeTimers();
++  hidden = false;
++  emailState = 'e1';
++  vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden);
++  fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
++    const body = init?.body ? JSON.parse(String(init.body)) : null;
++    return new Response(JSON.stringify(body ? {
++      methodResponses: body.methodCalls.map(([method, args, id]: [string, { accountId: string }, string]) =>
++        [method, { accountId: args.accountId, list: [], state: method === 'Email/get' ? emailState : 'm1' }, id]),
++    } : session()), { status: 200 });
++  });
++  vi.stubGlobal('fetch', fetchMock);
++});
++
++afterEach(() => {
++  for (const client of clients.splice(0)) client.disconnect();
++  vi.restoreAllMocks();
++  vi.unstubAllGlobals();
++  vi.useRealTimers();
++});
++
++describe('fallback state polling cadence', () => {
++  it('primes once, then waits 30 seconds instead of repeatedly polling while idle', async () => {
++    const client = await connect();
++    client.setupPushNotifications();
++    await vi.advanceTimersByTimeAsync(0);
++    expect(statePolls()).toHaveLength(1);
++    fetchMock.mockClear();
++    await vi.advanceTimersByTimeAsync(29_999);
++    expect(statePolls()).toHaveLength(0);
++    await vi.advanceTimersByTimeAsync(1);
++    expect(statePolls()).toHaveLength(1);
++  });
++
++  it('pauses hidden-tab polling and checks immediately on return, reporting new mail', async () => {
++    const client = await connect();
++    const changed = vi.fn();
++    client.onStateChange(changed);
++    client.setupPushNotifications();
++    await vi.advanceTimersByTimeAsync(0);
++    fetchMock.mockClear();
++    hidden = true;
++    emailState = 'e2';
++    await vi.advanceTimersByTimeAsync(90_000);
++    expect(statePolls()).toHaveLength(0);
++    hidden = false;
++    document.dispatchEvent(new Event('visibilitychange'));
++    await vi.advanceTimersByTimeAsync(0);
++    expect(statePolls()).toHaveLength(1);
++    expect(changed).toHaveBeenCalledWith({ '@type': 'StateChange', changed: { a: { Email: 'e2' } } });
++  });
++
++  it('keeps three logged-in clients to three state checks per 30 seconds', async () => {
++    for (let i = 0; i < 3; i++) (await connect()).setupPushNotifications();
++    await vi.advanceTimersByTimeAsync(0);
++    fetchMock.mockClear();
++    await vi.advanceTimersByTimeAsync(30_000);
++    expect(statePolls()).toHaveLength(3);
++  });
++
++  it('replaces the shared-account timer and does not stack duplicate fallback timers', async () => {
++    const client = await connect();
++    const internal = client as unknown as { startSlowPoll(): void; startPollingFallback(): void };
++    internal.startSlowPoll();
++    await vi.advanceTimersByTimeAsync(0);
++    internal.startPollingFallback();
++    internal.startPollingFallback();
++    await vi.advanceTimersByTimeAsync(0);
++    fetchMock.mockClear();
++    await vi.advanceTimersByTimeAsync(20_000);
++    expect(statePolls()).toHaveLength(0);
++    await vi.advanceTimersByTimeAsync(10_000);
++    expect(statePolls()).toHaveLength(1);
++  });
++
++  it('stops the fallback when a push connection becomes available', async () => {
++    const client = await connect();
++    client.setupPushNotifications();
++    await vi.advanceTimersByTimeAsync(0);
++    const internal = client as unknown as {
++      connectSSE(url: string): void;
++      readSSEStream(body: ReadableStream<Uint8Array>, controller: AbortController): Promise<void>;
++    };
++    vi.spyOn(internal, 'readSSEStream').mockResolvedValue();
++    internal.connectSSE(`${server}/events`);
++    await vi.advanceTimersByTimeAsync(0);
++    expect(internal.readSSEStream).toHaveBeenCalledOnce();
++    fetchMock.mockClear();
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(statePolls()).toHaveLength(0);
++  });
++});
+diff --git a/lib/jmap/client.ts b/lib/jmap/client.ts
+index be310bc4..319e80eb 100644
+--- a/lib/jmap/client.ts
++++ b/lib/jmap/client.ts
+@@ -8643,7 +8643,7 @@ export class JMAPClient implements IJMAPClient {
+   private sseReconnectTimeout: NodeJS.Timeout | null = null;
+   private ssePingTimer: NodeJS.Timeout | null = null;
+   private lastSSEActivity: number = 0;
+-  // Guards a state-change poll from stacking: the 3s interval, the secondary
++  // Guards a state-change poll from stacking: the fallback interval, the secondary
+   // poll, and the visibility/online handlers all call checkForStateChanges, so
+   // under socket pressure they would otherwise pile identical POSTs onto an
+   // already-saturated pool and amplify the queueing (#781).
+@@ -8731,7 +8731,9 @@ export class JMAPClient implements IJMAPClient {
+     'SieveScript/get': 'SieveScript',
+   };
+ 
+-  private static readonly POLLING_INTERVAL = 3_000;
++  // Each login has its own client. A 3s fallback multiplies across accounts
++  // and tabs even while nothing changes; push handles immediate delivery.
++  private static readonly POLLING_INTERVAL = 30_000;
+   // Shared/secondary accounts get no SSE push (Stalwart pushes the primary
+   // account only), so poll them on a slow cadence alongside SSE to keep their
+   // folder + unified/All-Mail counters from going stale between focus events.
+@@ -8760,6 +8762,7 @@ export class JMAPClient implements IJMAPClient {
+    * return). Reuses checkForStateChanges, which already reports per-account.
+    */
+   private startSecondaryAccountPoll(): void {
++    if (this.pollingInterval) return; // The fallback already covers all accounts.
+     if (this.secondaryPollInterval) return;
+     const hasSecondary = this.pollAccountIds().some((id) => id !== this.accountId);
+     if (!hasSecondary) return;
+@@ -8840,6 +8843,12 @@ export class JMAPClient implements IJMAPClient {
+         this.fallbackToPolling();
+         return;
+       }
++      // Once push recovers, stop its fallback rather than polling alongside it.
++      if (this.pollingInterval) {
++        clearInterval(this.pollingInterval);
++        this.pollingInterval = null;
++      }
++      this.startSecondaryAccountPoll();
+       this.readSSEStream(response.body, controller);
+     }).catch((error) => {
+       // Intentional close, not a failure - no polling fallback.
+@@ -8946,10 +8955,16 @@ export class JMAPClient implements IJMAPClient {
+       return;
+     }
+     // Idempotent: a repeat setup (or an SSE->poll fallback that races another)
+-    // must not leak a second 3s interval alongside the first (#781).
++    // must not leak a second interval alongside the first (#781).
+     if (this.pollingInterval) return;
++    // This poll includes shared accounts; their separate slow poll is redundant.
++    if (this.secondaryPollInterval) {
++      clearInterval(this.secondaryPollInterval);
++      this.secondaryPollInterval = null;
++    }
+     this.fetchCurrentStates();
+     this.pollingInterval = setInterval(() => {
++      if (typeof document !== 'undefined' && document.hidden) return;
+       this.checkForStateChanges();
+     }, JMAPClient.POLLING_INTERVAL);
+   }

@@ -15,6 +15,27 @@ Messages without authentication results or a spam score have no collapsed sectio
 The patch is pinned to upstream commit
 `d1f4ccaccff840a43471d40e645453e0dcfcfef4` (Bulwark 1.17.1).
 
+## Background update checks
+
+`polling-cadence.patch` changes the same pinned source's `lib/jmap/client.ts`.
+The upstream fallback checks state every 3 seconds per logged-in client when
+push notifications are unavailable. Multiple logged-in accounts or tabs can
+therefore generate roughly one request per second in aggregate. Each poll checks
+mailbox/email state, plus supported calendar and filter state; it is not a full
+message download. Keep-alive pings are separate and run every 30 seconds.
+
+The customized fallback checks every 30 seconds, skips ticks while the tab is
+hidden, and retains the immediate state check when the tab becomes visible or
+the network reconnects. A fallback already covers shared accounts, so it replaces
+their redundant 20-second poll. When push recovers, fallback polling stops and
+the shared-account poll resumes if needed. Successful push updates remain
+immediate. Without push, new background mail may take up to 30 seconds to appear
+in a visible tab. This patch does not change login-token refresh behavior or
+claim to resolve intermittent 401 responses.
+
+Five timer-based regressions cover the 30-second cadence, hidden tabs and focus
+reconciliation, multiple logins, duplicate timers, and recovery to push updates.
+
 ## Build
 
 With Git, Node.js, and npm installed:

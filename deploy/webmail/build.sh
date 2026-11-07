@@ -11,8 +11,12 @@ cd "$build_dir/source"
 git checkout --detach "$source_revision"
 git apply --check "$script_dir/collapsed-authentication.patch"
 git apply "$script_dir/collapsed-authentication.patch"
+git apply --check "$script_dir/polling-cadence.patch"
+git apply "$script_dir/polling-cadence.patch"
 npm ci
-npx vitest run lib/__tests__/email-headers.test.ts components/email/__tests__/viewer-plugin-slot-remount.test.tsx
+npx vitest run lib/__tests__/email-headers.test.ts components/email/__tests__/viewer-plugin-slot-remount.test.tsx \
+  lib/__tests__/jmap-client-polling-cadence.test.ts lib/__tests__/jmap-client-resilience.test.ts \
+  lib/__tests__/jmap-client-poll-batching.test.ts
 npx tsc --noEmit
 CI=true LITE_TARGET=stalwart GIT_COMMIT="$source_revision" npm run build:lite
 # Give the deployed entry page an exact revision marker for the health check.
